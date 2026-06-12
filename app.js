@@ -15,7 +15,7 @@ const DEFAULT_PERSONAS = [
   {
     id: 'p-default-coder',
     name: '代码专家',
-    systemPrompt: '你是一个拥有多年架构设计和编码经验的高级软件工程师。请为用户提供结构清晰、健壮、安全并带有关键注释的代码实现。回答时要直接说明核心原理和实现逻辑，避免无意义的寒暄。',
+    systemPrompt: '你是一个拥有多年架构设计和编码经验的高级软件工程师。请为用户提供结构清晰、健壮、安全并带有关键注释的代码实现。回答时要直接说明核心原理 and 实现逻辑，避免无意义的寒暄。',
     emoji: '💻',
     model: 'gpt-4o-mini',
     temperature: 0.2
@@ -30,10 +30,37 @@ const DEFAULT_PERSONAS = [
   }
 ];
 
+// 防御性解析 localStorage 缓存，防止先前失控测试脚本写入脏数据导致整个 JS 脚本崩溃
+let loadedPersonas = [...DEFAULT_PERSONAS];
+try {
+  const stored = localStorage.getItem('chat_personas');
+  if (stored) {
+    const parsed = JSON.parse(stored);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      loadedPersonas = parsed;
+    }
+  }
+} catch (e) {
+  console.error("加载人设缓存失败，已恢复默认设置:", e);
+}
+
+let loadedConversations = [];
+try {
+  const stored = localStorage.getItem('chat_conversations');
+  if (stored) {
+    const parsed = JSON.parse(stored);
+    if (Array.isArray(parsed)) {
+      loadedConversations = parsed;
+    }
+  }
+} catch (e) {
+  console.error("加载会话历史缓存失败:", e);
+}
+
 let state = {
   apiKey: localStorage.getItem('chat_api_key') || '',
-  personas: JSON.parse(localStorage.getItem('chat_personas')) || [...DEFAULT_PERSONAS],
-  conversations: JSON.parse(localStorage.getItem('chat_conversations')) || [],
+  personas: loadedPersonas,
+  conversations: loadedConversations,
   currentConversationId: localStorage.getItem('chat_current_conv_id') || '',
   currentPersonaId: localStorage.getItem('chat_current_persona_id') || 'p-default-helper',
   editingPersonaId: null // 标识当前正在编辑的人设，如果为 null 则为新建
