@@ -1,0 +1,12 @@
+# Ignore Node dependencies and local run resources
+node_modules/
+package-lock.json
+package.json
+verify.js
+PROJECT.md
+TEST_INFRA.md
+TEST_READY.md
+ORIGINAL_REQUEST.md
+.agents/
+.git/
+.DS_Store
