@@ -142,7 +142,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 9. 绑定各种按钮点击事件
   sidebarToggleBtn.addEventListener('click', openSidebar);
   sidebarOverlay.addEventListener('click', closeSidebar);
-  themeToggleBtn.addEventListener('click', toggleTheme);
+
   saveApiKeyBtn.addEventListener('click', saveApiKey);
   newPersonaBtn.addEventListener('click', () => openPersonaModal());
   cancelPersonaBtn.addEventListener('click', closePersonaModal);
@@ -396,7 +396,7 @@ function renderConversations() {
     const item = document.createElement('div');
     item.className = `group flex items-center justify-between p-2 rounded-lg text-sm transition-all duration-200 cursor-pointer ${
       isSelected 
-        ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium border-l-2 border-indigo-600' 
+        ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium border-l-2 border-indigo-600'
         : 'hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-600 dark:text-slate-400'
     }`;
     item.setAttribute('data-conversation-id', c.id);
@@ -517,9 +517,15 @@ window.clearAllData = function() {
 // 8. 消息绘制与 Markdown 解析
 // ==========================================
 function renderMessages(messages) {
+  const emptyState = document.getElementById("empty-state");
+  const quickActions = document.getElementById("quick-actions");
+  if (emptyState) emptyState.style.display = messages.length > 0 ? "none" : "flex";
+  if (quickActions) quickActions.style.display = messages.length > 0 ? "none" : "flex";
+
   // 先把原有消息流清空，同时保持 typing-indicator 的结构
   const indicator = typingIndicator.cloneNode(true);
   chatMessages.innerHTML = '';
+  if (emptyState) chatMessages.appendChild(emptyState);
   chatMessages.appendChild(indicator);
 
   if (messages.length === 0) {
@@ -554,7 +560,7 @@ function appendMessageDOM(role, content) {
       </div>
     `
     : `
-      <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800/80 text-slate-800 dark:text-slate-100 rounded-2xl rounded-tl-none px-4 py-3 max-w-[85%] md:max-w-[75%] shadow-sm text-sm break-words leading-relaxed transition-colors duration-200">
+      <div class="bg-transparent text-gray-800 px-0 py-2 max-w-full text-[15px] break-words leading-relaxed">
         <div class="prose prose-slate dark:prose-invert max-w-none">
           ${parseMarkdown(content)}
         </div>
@@ -720,7 +726,7 @@ async function sendMessage() {
     const responseWrapper = document.createElement('div');
     responseWrapper.className = 'flex justify-start w-full';
     responseWrapper.innerHTML = `
-      <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800/80 text-slate-800 dark:text-slate-100 rounded-2xl rounded-tl-none px-4 py-3 max-w-[85%] md:max-w-[75%] shadow-sm text-sm break-words leading-relaxed transition-colors duration-200">
+      <div class="bg-transparent text-gray-800 px-0 py-2 max-w-full text-[15px] break-words leading-relaxed">
         <div class="prose prose-slate dark:prose-invert max-w-none message-content-node">
           <!-- 动态文字流写入处 -->
         </div>
