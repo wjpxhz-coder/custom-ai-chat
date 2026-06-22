@@ -72,8 +72,7 @@ let state = {
 const sidebar = document.getElementById('sidebar');
 const sidebarOverlay = document.getElementById('sidebar-overlay');
 const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
-// const themeToggleBtn = document.getElementById(\'theme-toggle-btn\');
-const themeToggleBtn = null;
+const themeToggleBtn = document.getElementById('theme-toggle-btn');
 
 const apiKeyInput = document.querySelector('[data-testid="api-key-input"]');
 const saveApiKeyBtn = document.querySelector('[data-testid="save-api-key"]');
@@ -237,7 +236,7 @@ function renderPersonas() {
     item.className = `group flex items-center justify-between p-2 rounded-lg text-sm transition-all duration-200 cursor-pointer ${
       isSelected 
         ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 font-medium' 
-        : 'hover:bg-slate-800/80 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
+        : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
     }`;
     item.setAttribute('data-persona-id', p.id);
 
@@ -397,7 +396,7 @@ function renderConversations() {
     const item = document.createElement('div');
     item.className = `group flex items-center justify-between p-2 rounded-lg text-sm transition-all duration-200 cursor-pointer ${
       isSelected 
-        ? 'bg-slate-800/80 dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium border-l-2 border-indigo-600'
+        ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium border-l-2 border-indigo-600'
         : 'hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-600 dark:text-slate-400'
     }`;
     item.setAttribute('data-conversation-id', c.id);
@@ -518,9 +517,15 @@ window.clearAllData = function() {
 // 8. 消息绘制与 Markdown 解析
 // ==========================================
 function renderMessages(messages) {
+  const emptyState = document.getElementById("empty-state");
+  const quickActions = document.getElementById("quick-actions");
+  if (emptyState) emptyState.style.display = messages.length > 0 ? "none" : "flex";
+  if (quickActions) quickActions.style.display = messages.length > 0 ? "none" : "flex";
+
   // 先把原有消息流清空，同时保持 typing-indicator 的结构
   const indicator = typingIndicator.cloneNode(true);
   chatMessages.innerHTML = '';
+  if (emptyState) chatMessages.appendChild(emptyState);
   chatMessages.appendChild(indicator);
 
   if (messages.length === 0) {
@@ -530,8 +535,8 @@ function renderMessages(messages) {
     welcome.className = 'flex flex-col items-center justify-center text-center py-20 px-4 space-y-4';
     welcome.innerHTML = `
       <span class="text-5xl animate-bounce duration-1000">${activePersona.emoji || '🤖'}</span>
-      <h2 class="text-xl font-bold text-slate-100">我是你的 ${activePersona.name}</h2>
-      <p class="text-sm text-slate-400 max-w-md">“ ${activePersona.systemPrompt} ”</p>
+      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">我是你的 ${activePersona.name}</h2>
+      <p class="text-sm text-slate-500 dark:text-slate-400 max-w-md">“ ${activePersona.systemPrompt} ”</p>
       <p class="text-xs text-slate-400 dark:text-slate-600">在底部输入框输入消息以开始新对话。</p>
     `;
     chatMessages.insertBefore(welcome, indicator);
@@ -555,7 +560,7 @@ function appendMessageDOM(role, content) {
       </div>
     `
     : `
-      <div class="bg-slate-900/50 backdrop-blur-xl border border-[#0ea5e9]/40 text-slate-100 rounded-2xl rounded-tl-none px-4 py-3 shadow-[0_0_15px_rgba(14,165,233,0.15)] max-w-[85%] md:max-w-[75%] shadow-sm text-sm break-words leading-relaxed transition-colors duration-200">
+      <div class="bg-transparent text-gray-800 px-0 py-2 max-w-full text-[15px] break-words leading-relaxed">
         <div class="prose prose-slate dark:prose-invert max-w-none">
           ${parseMarkdown(content)}
         </div>
@@ -598,22 +603,22 @@ function parseMarkdown(text) {
     
     return `
       <div class="relative group my-3">
-        <div class="flex items-center justify-between px-4 py-1.5 bg-slate-800/80  border border-b-0 border-slate-800/50 rounded-t-lg text-[10px] font-mono text-slate-400 transition-colors">
+        <div class="flex items-center justify-between px-4 py-1.5 bg-slate-100 dark:bg-slate-800/80 border border-b-0 border-slate-200 dark:border-slate-800 rounded-t-lg text-[10px] font-mono text-slate-500 dark:text-slate-400 transition-colors">
           <span>${language}</span>
-          <button class="btn-copy-code px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-700/50 hover:bg-slate-600/80 text-slate-300 active:scale-95 transition-all" data-code="${encodeURIComponent(rawCode)}">
+          <button class="btn-copy-code px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-700 hover:bg-slate-50 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 active:scale-95 transition-all" data-code="${encodeURIComponent(rawCode)}">
             复制
           </button>
         </div>
-        <pre class="bg-slate-900/60 backdrop-blur-md border border-slate-800/50 p-4 rounded-b-lg font-mono text-xs overflow-x-auto text-slate-800 dark:text-slate-200"><code class="language-${language}">${code}</code></pre>
+        <pre class="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 p-4 rounded-b-lg font-mono text-xs overflow-x-auto text-slate-800 dark:text-slate-200"><code class="language-${language}">${code}</code></pre>
       </div>
     `;
   });
 
   // 3. 解析行内代码 `code`
-  html = html.replace(/`([^`]+)`/g, '<code class="bg-slate-800/80  px-1 py-0.5 rounded font-mono text-xs text-indigo-600 dark:text-indigo-400">$1</code>');
+  html = html.replace(/`([^`]+)`/g, '<code class="bg-slate-100 dark:bg-slate-800/80 px-1 py-0.5 rounded font-mono text-xs text-indigo-600 dark:text-indigo-400">$1</code>');
 
   // 4. 解析加粗 **bold**
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-slate-50 font-semibold">$1</strong>');
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-slate-900 dark:text-slate-50 font-semibold">$1</strong>');
 
   // 5. 解析列表
   // 匹配无序列表 - item
@@ -721,7 +726,7 @@ async function sendMessage() {
     const responseWrapper = document.createElement('div');
     responseWrapper.className = 'flex justify-start w-full';
     responseWrapper.innerHTML = `
-      <div class="bg-slate-900/50 backdrop-blur-xl border border-[#0ea5e9]/40 text-slate-100 rounded-2xl rounded-tl-none px-4 py-3 shadow-[0_0_15px_rgba(14,165,233,0.15)] max-w-[85%] md:max-w-[75%] shadow-sm text-sm break-words leading-relaxed transition-colors duration-200">
+      <div class="bg-transparent text-gray-800 px-0 py-2 max-w-full text-[15px] break-words leading-relaxed">
         <div class="prose prose-slate dark:prose-invert max-w-none message-content-node">
           <!-- 动态文字流写入处 -->
         </div>
@@ -790,7 +795,7 @@ async function sendMessage() {
     const errWrapper = document.createElement('div');
     errWrapper.className = 'flex justify-start w-full';
     errWrapper.innerHTML = `
-      <div class="bg-rose-950/40 backdrop-blur-md border border-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.2)] text-rose-700 dark:text-rose-400 rounded-2xl rounded-tl-none px-4 py-2.5 max-w-[85%] shadow-sm text-xs transition-colors duration-200">
+      <div class="bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-400 rounded-2xl rounded-tl-none px-4 py-2.5 max-w-[85%] shadow-sm text-xs transition-colors duration-200">
         <strong>请求失败：</strong> ${err.message || '网络或接口连接异常'}
       </div>
     `;
