@@ -1,115 +1,289 @@
-// app.js - 个人 AI 对话网站的核心业务逻辑
+// app.js - Custom AI Chat 核心逻辑 (v2.0 优化版)
 
 // ==========================================
-// 1. 初始化与数据结构
+// 1. 常量定义与默认数据
 // ==========================================
+
+const PROVIDER_PRESETS = {
+  chatanywhere: {
+    name: 'ChatAnywhere (国内直连优化)',
+    endpoint: 'https://api.chatanywhere.tech/v1',
+    defaultModel: 'gpt-4o-mini'
+  },
+  deepseek: {
+    name: 'DeepSeek 官方 API',
+    endpoint: 'https://api.deepseek.com/v1',
+    defaultModel: 'deepseek-chat'
+  },
+  openai: {
+    name: 'OpenAI 官方 API',
+    endpoint: 'https://api.openai.com/v1',
+    defaultModel: 'gpt-4o-mini'
+  },
+  siliconflow: {
+    name: '硅基流动 (SiliconFlow)',
+    endpoint: 'https://api.siliconflow.cn/v1',
+    defaultModel: 'deepseek-ai/DeepSeek-V3'
+  },
+  moonshot: {
+    name: '月之暗面 (Moonshot / Kimi)',
+    endpoint: 'https://api.moonshot.cn/v1',
+    defaultModel: 'moonshot-v1-8k'
+  },
+  ollama: {
+    name: 'Ollama 本地大模型',
+    endpoint: 'http://localhost:11434/v1',
+    defaultModel: 'llama3'
+  },
+  custom: {
+    name: '自定义 Base URL',
+    endpoint: '',
+    defaultModel: ''
+  }
+};
+
 const DEFAULT_PERSONAS = [
   {
     id: 'p-default-helper',
     name: '通用助手',
-    systemPrompt: '你是一个乐于助人、诚实且知识渊博的AI助手。请用清晰、条理分明且符合逻辑的语言回答用户的问题。',
+    systemPrompt: '你是一个乐于助人、诚实且知识渊博的 AI 助手。请用清晰、条理分明且符合逻辑的语言回答用户的问题。在适当时可以使用清晰的 Markdown 排版、表格或代码块。',
     emoji: '🤖',
     model: 'gpt-4o-mini',
     temperature: 0.7
   },
   {
     id: 'p-default-coder',
-    name: '代码专家',
-    systemPrompt: '你是一个拥有多年架构设计和编码经验的高级软件工程师。请为用户提供结构清晰、健壮、安全并带有关键注释的代码实现。回答时要直接说明核心原理 and 实现逻辑，避免无意义的寒暄。',
+    name: '全栈架构师',
+    systemPrompt: '你是一个拥有多年高并发系统架构与全栈开发经验的高级软件工程师。请为用户提供结构清晰、健壮、安全并带有关键注释的代码实现。直接说明核心原理与实现逻辑，避免无意义的客套寒暄。',
     emoji: '💻',
     model: 'gpt-4o-mini',
     temperature: 0.2
   },
   {
+    id: 'p-default-reasoner',
+    name: '深度思考者',
+    systemPrompt: '你是一个擅长深度分析、批判性思维与复杂逻辑推演的专家。在解决复杂问题时，请展示清晰缜密的思维推导链条，分步骤剖析问题实质。',
+    emoji: '🧠',
+    model: 'deepseek-reasoner',
+    temperature: 0.6
+  },
+  {
     id: 'p-default-translator',
-    name: '中英翻译官',
-    systemPrompt: '你是一个资深的双语同声传译。当用户输入中文时，将其翻译为纯正流畅的英语；当用户输入英文或其它语言时，将其翻译为自然地道的中文。同时在翻译下方提供1-2句核心词汇和语法的精炼解析，无需进行多余的对话。',
+    name: '中英同传翻译官',
+    systemPrompt: '你是一个资深的双语同声传译。当用户输入中文时，将其翻译为纯正流畅的英语；当用户输入英文或其它语言时，将其翻译为自然地道的中文。同时在翻译下方提供 1-2 句核心词汇和高阶语法的精炼解析，无需进行多余的客套寒暄。',
     emoji: '🔤',
     model: 'gpt-4o-mini',
     temperature: 0.3
   }
 ];
 
-// 防御性解析 localStorage 缓存，防止先前失控测试脚本写入脏数据导致整个 JS 脚本崩溃
-let loadedPersonas = [...DEFAULT_PERSONAS];
-try {
-  const stored = localStorage.getItem('chat_personas');
-  if (stored) {
-    const parsed = JSON.parse(stored);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      loadedPersonas = parsed;
-    }
+// 防御性解析本地存储
+function safeLoadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed !== null ? parsed : fallback;
+  } catch (err) {
+    console.warn(`加载本地缓存 [${key}] 异常，已恢复默认:`, err);
+    return fallback;
   }
-} catch (e) {
-  console.error("加载人设缓存失败，已恢复默认设置:", e);
 }
 
-let loadedConversations = [];
-try {
-  const stored = localStorage.getItem('chat_conversations');
-  if (stored) {
-    const parsed = JSON.parse(stored);
-    if (Array.isArray(parsed)) {
-      loadedConversations = parsed;
-    }
-  }
-} catch (e) {
-  console.error("加载会话历史缓存失败:", e);
-}
-
-let state = {
+// 全局响应式状态
+const state = {
   apiKey: localStorage.getItem('chat_api_key') || '',
-  personas: loadedPersonas,
-  conversations: loadedConversations,
+  apiProvider: localStorage.getItem('chat_api_provider') || 'chatanywhere',
+  apiEndpoint: localStorage.getItem('chat_api_endpoint') || 'https://api.chatanywhere.tech/v1',
+  contextLimit: parseInt(localStorage.getItem('chat_context_limit') ?? '6', 10),
+  personas: safeLoadJSON('chat_personas', DEFAULT_PERSONAS),
+  conversations: safeLoadJSON('chat_conversations', []),
   currentConversationId: localStorage.getItem('chat_current_conv_id') || '',
   currentPersonaId: localStorage.getItem('chat_current_persona_id') || 'p-default-helper',
-  editingPersonaId: null // 标识当前正在编辑的人设，如果为 null 则为新建
+  editingPersonaId: null,
+  searchKeyword: '',
+  isGenerating: false,
+  abortController: null,
+  userScrolledUp: false
 };
 
+// 确保默认人设完整
+if (!Array.isArray(state.personas) || state.personas.length === 0) {
+  state.personas = [...DEFAULT_PERSONAS];
+}
+
 // ==========================================
-// 2. DOM 元素获取
+// 2. DOM 元素缓存
 // ==========================================
+
 const sidebar = document.getElementById('sidebar');
 const sidebarOverlay = document.getElementById('sidebar-overlay');
 const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
 const themeToggleBtn = document.getElementById('theme-toggle-btn');
+const sidebarThemeToggleBtn = document.getElementById('sidebar-theme-toggle-btn');
 
-const apiKeyInput = document.querySelector('[data-testid="api-key-input"]');
-const saveApiKeyBtn = document.querySelector('[data-testid="save-api-key"]');
+const apiProviderSelect = document.getElementById('api-provider-select');
+const apiEndpointInput = document.getElementById('api-endpoint-input');
+const apiKeyInput = document.getElementById('api-key-input');
+const toggleKeyVisibilityBtn = document.getElementById('toggle-key-visibility-btn');
+const contextLimitSelect = document.getElementById('context-limit-select');
+const saveApiKeyBtn = document.getElementById('save-api-key-btn');
+const apiStatusBadge = document.getElementById('api-status-badge');
 
 const personasList = document.getElementById('personas-list');
 const newPersonaBtn = document.querySelector('[data-testid="new-persona-btn"]');
 const personaModal = document.getElementById('persona-modal');
 const cancelPersonaBtn = document.getElementById('cancel-persona');
 const savePersonaBtn = document.querySelector('[data-testid="save-persona"]');
+const personaModelSelect = document.getElementById('persona-model-select');
+const personaCustomModelInput = document.getElementById('persona-custom-model');
+const personaTempSlider = document.getElementById('persona-temp-slider');
+const tempValDisplay = document.getElementById('temp-val-display');
 
+const conversationSearchInput = document.getElementById('conversation-search-input');
 const conversationsList = document.getElementById('conversations-list');
 const newChatBtn = document.querySelector('[data-testid="new-chat-btn"]');
+const headerNewChatBtn = document.getElementById('header-new-chat-btn');
+const exportMdBtn = document.getElementById('export-md-btn');
+const exportJsonBtn = document.getElementById('export-json-btn');
+const importJsonTriggerBtn = document.getElementById('import-json-trigger-btn');
+const importJsonFile = document.getElementById('import-json-file');
 
 const chatMessages = document.getElementById('chat-messages');
 const chatInput = document.getElementById('chat-input');
 const sendBtn = document.getElementById('send-btn');
 const typingIndicator = document.getElementById('typing-indicator');
+const scrollBottomBtn = document.getElementById('scroll-bottom-btn');
 
 const headerPersonaEmoji = document.getElementById('header-persona-emoji');
 const headerPersonaName = document.getElementById('header-persona-name');
 const headerPersonaModel = document.getElementById('header-persona-model');
+const headerConversationTitle = document.getElementById('header-conversation-title');
+const headerProviderBadge = document.getElementById('header-provider-badge');
 
 // ==========================================
-// 3. 页面初始化
+// 3. Markdown / 代码高亮 / 数学公式解析
 // ==========================================
+
+// 初始化 Marked 解析器
+if (typeof marked !== 'undefined') {
+  const renderer = new marked.Renderer();
+
+  // 自定义代码块渲染器（集成 Highlight.js 与一键复制按钮）
+  renderer.code = function(code, lang) {
+    const language = (lang || '').trim();
+    let highlightedCode = '';
+    
+    if (typeof hljs !== 'undefined' && language && hljs.getLanguage(language)) {
+      try {
+        highlightedCode = hljs.highlight(code, { language }).value;
+      } catch (e) {
+        highlightedCode = escapeHTML(code);
+      }
+    } else if (typeof hljs !== 'undefined') {
+      try {
+        highlightedCode = hljs.highlightAuto(code).value;
+      } catch (e) {
+        highlightedCode = escapeHTML(code);
+      }
+    } else {
+      highlightedCode = escapeHTML(code);
+    }
+
+    const encodedCode = encodeURIComponent(code);
+
+    return `
+      <div class="code-block-wrapper my-3 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-900 shadow-sm text-xs">
+        <div class="flex items-center justify-between px-3.5 py-1.5 bg-slate-800/90 text-slate-300 font-mono border-b border-slate-700/60 select-none">
+          <span class="flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span class="text-[11px] uppercase tracking-wider text-slate-400">${language || 'code'}</span>
+          </span>
+          <button type="button" class="btn-copy-code px-2 py-0.5 rounded text-[11px] bg-slate-700 hover:bg-slate-600 text-slate-200 active:scale-95 transition-all flex items-center gap-1" data-code="${encodedCode}" title="复制代码">
+            <i data-lucide="copy" class="w-3 h-3 pointer-events-none"></i>
+            <span>复制</span>
+          </button>
+        </div>
+        <pre class="p-3.5 text-xs font-mono overflow-x-auto text-slate-100 leading-relaxed bg-[#1e1e2e]"><code>${highlightedCode}</code></pre>
+      </div>
+    `;
+  };
+
+  marked.setOptions({
+    renderer: renderer,
+    gfm: true,
+    breaks: true,
+    mangle: false,
+    headerIds: false
+  });
+}
+
+// HTML 安全转义
+function escapeHTML(str) {
+  if (!str) return '';
+  return str.replace(/[&<>'"]/g, tag => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;'
+  }[tag] || tag));
+}
+
+// 统一的 Markdown 解析函数
+function parseMarkdown(text) {
+  if (!text) return '';
+
+  try {
+    if (typeof marked !== 'undefined') {
+      const rawHtml = marked.parse(text);
+      if (typeof DOMPurify !== 'undefined') {
+        return DOMPurify.sanitize(rawHtml, {
+          ADD_TAGS: ['iframe', 'button', 'span', 'i', 'code', 'pre'],
+          ADD_ATTR: ['target', 'data-code', 'class', 'title', 'data-lucide', 'type']
+        });
+      }
+      return rawHtml;
+    }
+  } catch (err) {
+    console.error('Marked 解析异常:', err);
+  }
+
+  // 极简降级方案
+  return escapeHTML(text).replace(/\n/g, '<br>');
+}
+
+// 对指定 DOM 节点渲染数学公式 (KaTeX)
+function renderMathInNode(node) {
+  if (typeof renderMathInElement !== 'undefined' && node) {
+    try {
+      renderMathInElement(node, {
+        delimiters: [
+          { left: '$$', right: '$$', display: true },
+          { left: '$', right: '$', display: false },
+          { left: '\\[', right: '\\]', display: true },
+          { left: '\\(', right: '\\)', display: false }
+        ],
+        throwOnError: false
+      });
+    } catch (e) {
+      console.warn('KaTeX 公式渲染异常:', e);
+    }
+  }
+}
+
+// ==========================================
+// 4. 页面初始化与事件绑定
+// ==========================================
+
 document.addEventListener('DOMContentLoaded', () => {
-  // 1. 初始化 Lucide 图标
-  if (typeof lucide !== 'undefined') {
-    lucide.createIcons();
-  }
+  // 1. 刷新 Lucide 图标
+  refreshIcons();
 
-  // 2. 初始化 API Key
-  if (state.apiKey) {
-    apiKeyInput.value = state.apiKey;
-  }
+  // 2. 初始化 API 配置项与 UI
+  initSettingsUI();
 
-  // 3. 初始化并渲染主题按钮
+  // 3. 初始化并渲染主题
   renderThemeIcon();
 
   // 4. 渲染人设列表
@@ -118,53 +292,138 @@ document.addEventListener('DOMContentLoaded', () => {
   // 5. 渲染历史会话列表
   renderConversations();
 
-  // 6. 如果有当前会话，则加载并展示，否则选择默认人设并清除对话区
-  if (state.currentConversationId && state.conversations.some(c => c.id === state.currentConversationId)) {
-    selectConversation(state.currentConversationId);
-  } else {
-    // 默认展示当前人设的配置
-    const persona = state.personas.find(p => p.id === state.currentPersonaId) || state.personas[0];
-    updateHeader(persona);
-    renderMessages([]);
-  }
+  // 6. 初始化活跃会话
+  initActiveChat();
 
-  // 7. 绑定输入框自动拉伸
+  // 7. 绑定输入与发送控制
   chatInput.addEventListener('input', autoResizeInput);
-
-  // 8. 绑定按键事件
   chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      handleSendOrStop();
     }
   });
 
-  // 9. 绑定各种按钮点击事件
-  sidebarToggleBtn.addEventListener('click', openSidebar);
-  sidebarOverlay.addEventListener('click', closeSidebar);
-  themeToggleBtn.addEventListener('click', toggleTheme);
-  saveApiKeyBtn.addEventListener('click', saveApiKey);
-  newPersonaBtn.addEventListener('click', () => openPersonaModal());
-  cancelPersonaBtn.addEventListener('click', closePersonaModal);
-  savePersonaBtn.addEventListener('click', savePersona);
-  newChatBtn.addEventListener('click', createNewChat);
-  sendBtn.addEventListener('click', sendMessage);
+  // 8. 绑定所有按钮与交互
+  bindUIEvents();
 
-  // 10. 全局事件代理：用于删除/编辑人设、会话及复制代码
-  document.addEventListener('click', handleGlobalClicks);
+  // 9. 智能滚动监听
+  chatMessages.addEventListener('scroll', handleChatScroll);
+  scrollBottomBtn.addEventListener('click', scrollToBottomSmooth);
 });
 
-// ==========================================
-// 4. 主题切换与 UI 控制
-// ==========================================
-function renderThemeIcon() {
-  const isDark = document.documentElement.classList.contains('dark');
-  themeToggleBtn.innerHTML = isDark 
-    ? `<i data-lucide="sun" class="w-5 h-5 text-amber-500"></i>` 
-    : `<i data-lucide="moon" class="w-5 h-5 text-slate-700"></i>`;
+function refreshIcons() {
   if (typeof lucide !== 'undefined') {
     lucide.createIcons();
   }
+}
+
+function initSettingsUI() {
+  // API Key
+  if (state.apiKey) {
+    apiKeyInput.value = state.apiKey;
+    apiStatusBadge.innerText = '已配置密钥';
+    apiStatusBadge.className = 'text-[10px] px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
+  } else {
+    apiStatusBadge.innerText = '未配置密钥';
+    apiStatusBadge.className = 'text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400';
+  }
+
+  // Provider
+  if (state.apiProvider && PROVIDER_PRESETS[state.apiProvider]) {
+    apiProviderSelect.value = state.apiProvider;
+  } else {
+    apiProviderSelect.value = 'custom';
+  }
+
+  // Endpoint
+  apiEndpointInput.value = state.apiEndpoint || 'https://api.chatanywhere.tech/v1';
+
+  // Context Limit
+  contextLimitSelect.value = state.contextLimit.toString();
+
+  // 更新 Header 上的 Provider 徽章
+  updateProviderBadge();
+}
+
+function updateProviderBadge() {
+  const p = PROVIDER_PRESETS[state.apiProvider];
+  if (p) {
+    headerProviderBadge.innerText = p.name.split(' ')[0];
+  } else {
+    headerProviderBadge.innerText = '自定义接口';
+  }
+}
+
+function bindUIEvents() {
+  // 侧边栏展开折叠
+  sidebarToggleBtn.addEventListener('click', openSidebar);
+  sidebarOverlay.addEventListener('click', closeSidebar);
+
+  // 主题切换
+  themeToggleBtn.addEventListener('click', toggleTheme);
+  sidebarThemeToggleBtn.addEventListener('click', toggleTheme);
+
+  // 接口预设切换
+  apiProviderSelect.addEventListener('change', handleProviderChange);
+
+  // API 密钥显隐切换
+  toggleKeyVisibilityBtn.addEventListener('click', () => {
+    const isPassword = apiKeyInput.type === 'password';
+    apiKeyInput.type = isPassword ? 'text' : 'password';
+    toggleKeyVisibilityBtn.innerHTML = isPassword 
+      ? `<i data-lucide="eye-off" class="w-3.5 h-3.5"></i>` 
+      : `<i data-lucide="eye" class="w-3.5 h-3.5"></i>`;
+    refreshIcons();
+  });
+
+  // 保存设置按钮
+  saveApiKeyBtn.addEventListener('click', saveSettings);
+
+  // 人设模态框
+  newPersonaBtn.addEventListener('click', () => openPersonaModal());
+  cancelPersonaBtn.addEventListener('click', closePersonaModal);
+  savePersonaBtn.addEventListener('click', savePersona);
+  personaModelSelect.addEventListener('change', handleModelSelectChange);
+  personaTempSlider.addEventListener('input', (e) => {
+    tempValDisplay.innerText = e.target.value;
+  });
+
+  // 会话搜索输入过滤
+  conversationSearchInput.addEventListener('input', (e) => {
+    state.searchKeyword = e.target.value.trim().toLowerCase();
+    renderConversations();
+  });
+
+  // 新建会话按钮
+  newChatBtn.addEventListener('click', createNewChat);
+  headerNewChatBtn.addEventListener('click', createNewChat);
+
+  // 发送 / 停止按钮
+  sendBtn.addEventListener('click', handleSendOrStop);
+
+  // 导出与导入
+  exportMdBtn.addEventListener('click', exportActiveChatAsMarkdown);
+  exportJsonBtn.addEventListener('click', exportAllDataAsJSON);
+  importJsonTriggerBtn.addEventListener('click', () => importJsonFile.click());
+  importJsonFile.addEventListener('change', handleImportJSON);
+
+  // 全局事件代理（用于气泡复制、重新生成、会话删除/编辑等）
+  document.addEventListener('click', handleGlobalClicks);
+}
+
+// ==========================================
+// 5. 主题与界面外观
+// ==========================================
+
+function renderThemeIcon() {
+  const isDark = document.documentElement.classList.contains('dark');
+  const iconMarkup = isDark 
+    ? `<i data-lucide="sun" class="w-4 h-4 text-amber-400"></i>` 
+    : `<i data-lucide="moon" class="w-4 h-4 text-slate-700"></i>`;
+  themeToggleBtn.innerHTML = iconMarkup;
+  sidebarThemeToggleBtn.innerHTML = iconMarkup;
+  refreshIcons();
 }
 
 function toggleTheme() {
@@ -189,73 +448,113 @@ window.closeSidebar = function() {
   sidebar.classList.add('-translate-x-full');
   sidebarOverlay.classList.remove('opacity-100');
   sidebarOverlay.classList.add('opacity-0', 'pointer-events-none');
-}
+};
 
 function autoResizeInput() {
   chatInput.style.height = 'auto';
-  chatInput.style.height = (chatInput.scrollHeight) + 'px';
+  chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + 'px';
 }
 
-// ==========================================
-// 5. API 密钥与设置
-// ==========================================
-function saveApiKey() {
-  const key = apiKeyInput.value.trim();
-  state.apiKey = key;
-  localStorage.setItem('chat_api_key', key);
-  showToast('API Key 保存成功');
-}
-
-// 辅助轻量 Toast 提醒
 function showToast(message, isError = false) {
-  const toast = document.createElement('div');
-  toast.className = `fixed bottom-20 left-1/2 transform -translate-x-1/2 px-4 py-2 rounded-lg text-sm text-white shadow-lg z-50 transition-all duration-300 transform translate-y-2 opacity-0 ${isError ? 'bg-rose-600' : 'bg-slate-800 dark:bg-slate-700'}`;
-  toast.innerText = message;
-  document.body.appendChild(toast);
-  
-  // 触发动画
-  setTimeout(() => {
-    toast.classList.remove('translate-y-2', 'opacity-0');
-  }, 10);
+  const existing = document.getElementById('global-toast');
+  if (existing) existing.remove();
 
-  // 销毁
+  const toast = document.createElement('div');
+  toast.id = 'global-toast';
+  toast.className = `fixed top-6 left-1/2 -translate-x-1/2 px-4 py-2.5 rounded-xl text-xs text-white shadow-xl z-50 transition-all duration-300 transform -translate-y-4 opacity-0 flex items-center gap-2 ${
+    isError ? 'bg-rose-600 shadow-rose-600/20' : 'bg-slate-900 dark:bg-slate-800 border border-slate-700 shadow-black/30'
+  }`;
+  
+  toast.innerHTML = `
+    <i data-lucide="${isError ? 'alert-circle' : 'check-circle-2'}" class="w-4 h-4 text-white"></i>
+    <span>${escapeHTML(message)}</span>
+  `;
+  document.body.appendChild(toast);
+  refreshIcons();
+
+  requestAnimationFrame(() => {
+    toast.classList.remove('-translate-y-4', 'opacity-0');
+  });
+
   setTimeout(() => {
-    toast.classList.add('translate-y-2', 'opacity-0');
+    toast.classList.add('-translate-y-4', 'opacity-0');
     setTimeout(() => toast.remove(), 300);
-  }, 2000);
+  }, 2400);
 }
 
 // ==========================================
-// 6. 人设管理 (CRUD)
+// 6. 配置项管理与保存
 // ==========================================
+
+function handleProviderChange() {
+  const providerKey = apiProviderSelect.value;
+  const preset = PROVIDER_PRESETS[providerKey];
+  if (preset && preset.endpoint) {
+    apiEndpointInput.value = preset.endpoint;
+  }
+}
+
+function saveSettings() {
+  const key = apiKeyInput.value.trim();
+  const provider = apiProviderSelect.value;
+  let endpoint = apiEndpointInput.value.trim();
+
+  if (!endpoint) {
+    endpoint = 'https://api.chatanywhere.tech/v1';
+    apiEndpointInput.value = endpoint;
+  }
+
+  // 去除末尾斜杠
+  endpoint = endpoint.replace(/\/+$/, '');
+
+  const contextLimit = parseInt(contextLimitSelect.value, 10);
+
+  state.apiKey = key;
+  state.apiProvider = provider;
+  state.apiEndpoint = endpoint;
+  state.contextLimit = isNaN(contextLimit) ? 6 : contextLimit;
+
+  localStorage.setItem('chat_api_key', key);
+  localStorage.setItem('chat_api_provider', provider);
+  localStorage.setItem('chat_api_endpoint', endpoint);
+  localStorage.setItem('chat_context_limit', state.contextLimit.toString());
+
+  initSettingsUI();
+  showToast('配置保存成功！');
+}
+
+// ==========================================
+// 7. 人设管理 (CRUD)
+// ==========================================
+
 function renderPersonas() {
   personasList.innerHTML = '';
+
   state.personas.forEach(p => {
     const isSelected = p.id === state.currentPersonaId;
     const item = document.createElement('div');
-    item.className = `group flex items-center justify-between p-2 rounded-lg text-sm transition-all duration-200 cursor-pointer ${
+    item.className = `group flex items-center justify-between p-2 rounded-xl text-xs transition-all duration-150 cursor-pointer ${
       isSelected 
-        ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 font-medium' 
-        : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
+        ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 font-medium border border-indigo-200/60 dark:border-indigo-800/60' 
+        : 'hover:bg-slate-100 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-300 border border-transparent'
     }`;
     item.setAttribute('data-persona-id', p.id);
 
-    // 人设内容区
     item.innerHTML = `
       <div class="flex items-center space-x-2.5 min-w-0 flex-1 btn-select-persona">
         <span class="text-base flex-shrink-0">${p.emoji || '🤖'}</span>
         <div class="min-w-0 flex-1">
-          <p class="truncate leading-tight text-xs">${p.name}</p>
-          <p class="text-[9px] text-slate-400 dark:text-slate-500 truncate mt-0.5">${p.model}</p>
+          <p class="truncate leading-tight font-medium">${escapeHTML(p.name)}</p>
+          <p class="text-[10px] text-slate-400 dark:text-slate-500 truncate mt-0.5 font-mono">${escapeHTML(p.model || 'gpt-4o-mini')}</p>
         </div>
       </div>
       <div class="opacity-0 group-hover:opacity-100 flex items-center space-x-1 flex-shrink-0 transition-opacity">
-        <button class="btn-edit-persona p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" title="编辑人设">
-          <i data-lucide="edit-3" class="w-3 h-3 pointer-events-none"></i>
+        <button type="button" class="btn-edit-persona p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" title="编辑人设">
+          <i data-lucide="edit-3" class="w-3.5 h-3.5 pointer-events-none"></i>
         </button>
         ${!p.id.startsWith('p-default-') ? `
-          <button class="btn-delete-persona p-1 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded text-slate-400 hover:text-rose-600" title="删除人设">
-            <i data-lucide="trash-2" class="w-3 h-3 pointer-events-none"></i>
+          <button type="button" class="btn-delete-persona p-1 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg text-slate-400 hover:text-rose-500" title="删除人设">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5 pointer-events-none"></i>
           </button>
         ` : ''}
       </div>
@@ -264,8 +563,16 @@ function renderPersonas() {
     personasList.appendChild(item);
   });
 
-  if (typeof lucide !== 'undefined') {
-    lucide.createIcons();
+  refreshIcons();
+}
+
+function handleModelSelectChange() {
+  const val = personaModelSelect.value;
+  if (val === 'custom') {
+    personaCustomModelInput.value = '';
+    personaCustomModelInput.focus();
+  } else {
+    personaCustomModelInput.value = val;
   }
 }
 
@@ -275,28 +582,36 @@ function openPersonaModal(personaId = null) {
   const nameInp = document.querySelector('[data-testid="persona-name"]');
   const promptInp = document.querySelector('[data-testid="persona-prompt"]');
   const emojiInp = document.querySelector('[data-testid="persona-emoji"]');
-  const modelSel = document.querySelector('[data-testid="persona-model"]');
-  const tempInp = document.querySelector('[data-testid="persona-temp"]');
 
   if (personaId) {
-    // 编辑现有人设
     const p = state.personas.find(item => item.id === personaId);
     if (p) {
       modalTitle.innerText = '编辑 AI 人设';
       nameInp.value = p.name;
       promptInp.value = p.systemPrompt;
       emojiInp.value = p.emoji || '🤖';
-      modelSel.value = p.model || 'gpt-4o-mini';
-      tempInp.value = p.temperature !== undefined ? p.temperature : 0.7;
+      
+      const optionExists = Array.from(personaModelSelect.options).some(o => o.value === p.model);
+      if (optionExists) {
+        personaModelSelect.value = p.model;
+      } else {
+        personaModelSelect.value = 'custom';
+      }
+      personaCustomModelInput.value = p.model || 'gpt-4o-mini';
+
+      const temp = p.temperature !== undefined ? p.temperature : 0.7;
+      personaTempSlider.value = temp;
+      tempValDisplay.innerText = temp;
     }
   } else {
-    // 创建新人设
     modalTitle.innerText = '创建 AI 人设';
     nameInp.value = '';
     promptInp.value = '';
     emojiInp.value = '🤖';
-    modelSel.value = 'gpt-4o-mini';
-    tempInp.value = '0.7';
+    personaModelSelect.value = 'gpt-4o-mini';
+    personaCustomModelInput.value = 'gpt-4o-mini';
+    personaTempSlider.value = '0.7';
+    tempValDisplay.innerText = '0.7';
   }
 
   personaModal.classList.remove('hidden');
@@ -313,29 +628,32 @@ function savePersona() {
   const name = document.querySelector('[data-testid="persona-name"]').value.trim();
   const prompt = document.querySelector('[data-testid="persona-prompt"]').value.trim();
   const emoji = document.querySelector('[data-testid="persona-emoji"]').value.trim() || '🤖';
-  const model = document.querySelector('[data-testid="persona-model"]').value;
-  const temp = parseFloat(document.querySelector('[data-testid="persona-temp"]').value) || 0.7;
+  
+  let model = personaCustomModelInput.value.trim();
+  if (!model) {
+    model = personaModelSelect.value !== 'custom' ? personaModelSelect.value : 'gpt-4o-mini';
+  }
+
+  const temp = parseFloat(personaTempSlider.value) || 0.7;
 
   if (!name) {
-    showToast('人设名称不能为空', true);
+    showToast('请输入人设名称', true);
     return;
   }
   if (!prompt) {
-    showToast('系统提示词不能为空', true);
+    showToast('请输入系统提示词 (Prompt)', true);
     return;
   }
 
   if (state.editingPersonaId) {
-    // 修改
     state.personas = state.personas.map(p => {
       if (p.id === state.editingPersonaId) {
         return { ...p, name, systemPrompt: prompt, emoji, model, temperature: temp };
       }
       return p;
     });
-    showToast('人设修改成功');
+    showToast('人设更新成功');
   } else {
-    // 新增
     const newPersona = {
       id: 'p-custom-' + Date.now(),
       name,
@@ -345,31 +663,29 @@ function savePersona() {
       temperature: temp
     };
     state.personas.push(newPersona);
-    state.currentPersonaId = newPersona.id; // 自动选中新创建的人设
+    state.currentPersonaId = newPersona.id;
     showToast('人设创建成功');
   }
 
   localStorage.setItem('chat_personas', JSON.stringify(state.personas));
   localStorage.setItem('chat_current_persona_id', state.currentPersonaId);
-  
-  // 更新主界面的 header
-  const currentPersona = state.personas.find(p => p.id === state.currentPersonaId);
-  if (currentPersona) {
-    updateHeader(currentPersona);
-  }
+
+  const active = state.personas.find(p => p.id === state.currentPersonaId);
+  if (active) updateHeader(active);
 
   renderPersonas();
   closePersonaModal();
 }
 
 function deletePersona(id) {
-  // 默认人设不能删除
-  if (id.startsWith('p-default-')) return;
+  if (id.startsWith('p-default-')) {
+    showToast('系统默认人设不可删除', true);
+    return;
+  }
 
   state.personas = state.personas.filter(p => p.id !== id);
   localStorage.setItem('chat_personas', JSON.stringify(state.personas));
 
-  // 如果被删除的是当前选中人设，切换为第一个人设
   if (state.currentPersonaId === id) {
     state.currentPersonaId = state.personas[0].id;
     localStorage.setItem('chat_current_persona_id', state.currentPersonaId);
@@ -381,53 +697,79 @@ function deletePersona(id) {
 }
 
 // ==========================================
-// 7. 会话管理
+// 8. 会话历史管理
 // ==========================================
+
+function initActiveChat() {
+  if (state.currentConversationId && state.conversations.some(c => c.id === state.currentConversationId)) {
+    selectConversation(state.currentConversationId);
+  } else {
+    const persona = state.personas.find(p => p.id === state.currentPersonaId) || state.personas[0];
+    updateHeader(persona);
+    renderMessages([]);
+  }
+}
+
 function renderConversations() {
   conversationsList.innerHTML = '';
-  
-  if (state.conversations.length === 0) {
-    conversationsList.innerHTML = `<p class="text-xs text-slate-400 dark:text-slate-600 text-center py-4">无历史会话记录</p>`;
+
+  let list = state.conversations;
+  if (state.searchKeyword) {
+    list = list.filter(c => (c.title || '').toLowerCase().includes(state.searchKeyword));
+  }
+
+  if (list.length === 0) {
+    conversationsList.innerHTML = `
+      <div class="py-8 text-center text-xs text-slate-400 dark:text-slate-600">
+        ${state.searchKeyword ? '未匹配到相关会话' : '暂无历史会话记录'}
+      </div>
+    `;
     return;
   }
 
-  state.conversations.forEach(c => {
+  list.forEach(c => {
     const isSelected = c.id === state.currentConversationId;
     const item = document.createElement('div');
-    item.className = `group flex items-center justify-between p-2 rounded-lg text-sm transition-all duration-200 cursor-pointer ${
+    item.className = `group flex items-center justify-between p-2 rounded-xl text-xs transition-all duration-150 cursor-pointer ${
       isSelected 
         ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium border-l-2 border-indigo-600' 
         : 'hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-600 dark:text-slate-400'
     }`;
     item.setAttribute('data-conversation-id', c.id);
 
-    // 查找人设
     const persona = state.personas.find(p => p.id === c.personaId) || DEFAULT_PERSONAS[0];
 
     item.innerHTML = `
       <div class="flex items-center space-x-2 min-w-0 flex-1 btn-select-conversation">
         <span class="text-xs flex-shrink-0">${persona.emoji || '🤖'}</span>
-        <span class="truncate text-xs flex-1">${c.title}</span>
+        <span class="truncate flex-1 conv-title-text" title="${escapeHTML(c.title)}">${escapeHTML(c.title)}</span>
       </div>
-      <button class="btn-delete-conversation opacity-0 group-hover:opacity-100 p-1 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded text-slate-400 hover:text-rose-600 transition-opacity" title="删除会话">
-        <i data-lucide="trash-2" class="w-3 h-3 pointer-events-none"></i>
-      </button>
+      <div class="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button type="button" class="btn-rename-conversation p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" title="重命名">
+          <i data-lucide="pencil" class="w-3 h-3 pointer-events-none"></i>
+        </button>
+        <button type="button" class="btn-delete-conversation p-1 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded text-slate-400 hover:text-rose-500" title="删除会话">
+          <i data-lucide="trash-2" class="w-3 h-3 pointer-events-none"></i>
+        </button>
+      </div>
     `;
 
     conversationsList.appendChild(item);
   });
 
-  if (typeof lucide !== 'undefined') {
-    lucide.createIcons();
-  }
+  refreshIcons();
 }
 
 function createNewChat() {
-  // 查找当前人设信息
+  if (state.isGenerating) {
+    showToast('正在生成中，请先停止', true);
+    return;
+  }
+
   const activePersona = state.personas.find(p => p.id === state.currentPersonaId) || state.personas[0];
   const newChat = {
     id: 'c-' + Date.now(),
-    title: `与${activePersona.name}的对话`,
+    title: `与 ${activePersona.name} 的对话`,
     personaId: activePersona.id,
     messages: []
   };
@@ -440,8 +782,7 @@ function createNewChat() {
 
   renderConversations();
   selectConversation(newChat.id);
-  
-  // 手机端自动折叠侧边栏
+
   if (window.innerWidth < 768) {
     closeSidebar();
   }
@@ -453,12 +794,11 @@ function selectConversation(id) {
 
   const conv = state.conversations.find(c => c.id === id);
   if (conv) {
-    // 自动切换为人设相匹配的状态
     state.currentPersonaId = conv.personaId;
     localStorage.setItem('chat_current_persona_id', conv.personaId);
-    
+
     const persona = state.personas.find(p => p.id === conv.personaId) || state.personas[0];
-    updateHeader(persona);
+    updateHeader(persona, conv.title);
     renderMessages(conv.messages);
   }
 
@@ -479,7 +819,6 @@ function deleteConversation(id) {
       state.currentConversationId = '';
       localStorage.removeItem('chat_current_conv_id');
       renderMessages([]);
-      // 恢复展示当前选择的人设头部
       const persona = state.personas.find(p => p.id === state.currentPersonaId) || state.personas[0];
       updateHeader(persona);
     }
@@ -489,211 +828,357 @@ function deleteConversation(id) {
   showToast('会话已删除');
 }
 
-function updateHeader(persona) {
+function renameConversation(id) {
+  const conv = state.conversations.find(c => c.id === id);
+  if (!conv) return;
+
+  const newTitle = prompt('请输入新的会话标题：', conv.title);
+  if (newTitle && newTitle.trim()) {
+    conv.title = newTitle.trim();
+    localStorage.setItem('chat_conversations', JSON.stringify(state.conversations));
+    renderConversations();
+    if (state.currentConversationId === id) {
+      headerConversationTitle.innerText = '· ' + conv.title;
+    }
+    showToast('标题已更新');
+  }
+}
+
+function updateHeader(persona, convTitle = '') {
   headerPersonaEmoji.innerText = persona.emoji || '🤖';
   headerPersonaName.innerText = persona.name;
   headerPersonaModel.innerText = persona.model;
+
+  if (convTitle) {
+    headerConversationTitle.innerText = '· ' + convTitle;
+  } else {
+    headerConversationTitle.innerText = '';
+  }
+
+  updateProviderBadge();
 }
 
+// 清空重置全部数据
 window.clearAllData = function() {
-  if (confirm('确定要清除所有数据吗？这将清空 API Key、自定义人设和所有会话记录。')) {
+  if (confirm('确定要清除所有数据吗？这将清空 API Key、自定义人设和所有历史对话。此操作无法撤销！')) {
     localStorage.clear();
     state.apiKey = '';
+    state.apiProvider = 'chatanywhere';
+    state.apiEndpoint = 'https://api.chatanywhere.tech/v1';
+    state.contextLimit = 6;
     state.personas = [...DEFAULT_PERSONAS];
     state.conversations = [];
     state.currentConversationId = '';
     state.currentPersonaId = 'p-default-helper';
 
-    apiKeyInput.value = '';
+    initSettingsUI();
     renderPersonas();
     renderConversations();
     updateHeader(state.personas[0]);
     renderMessages([]);
-    showToast('系统数据已全部重置');
+    showToast('系统已全部重置并恢复默认');
   }
-}
+};
 
 // ==========================================
-// 8. 消息绘制与 Markdown 解析
+// 9. 消息渲染与气泡 DOM
 // ==========================================
+
 function renderMessages(messages) {
-  // 先把原有消息流清空，同时保持 typing-indicator 的结构
-  const indicator = typingIndicator.cloneNode(true);
   chatMessages.innerHTML = '';
-  chatMessages.appendChild(indicator);
+  chatMessages.appendChild(typingIndicator);
 
-  if (messages.length === 0) {
-    // 显示空状态欢迎语
-    const activePersona = state.personas.find(p => p.id === state.currentPersonaId) || state.personas[0];
-    const welcome = document.createElement('div');
-    welcome.className = 'flex flex-col items-center justify-center text-center py-20 px-4 space-y-4';
-    welcome.innerHTML = `
-      <span class="text-5xl animate-bounce duration-1000">${activePersona.emoji || '🤖'}</span>
-      <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">我是你的 ${activePersona.name}</h2>
-      <p class="text-sm text-slate-500 dark:text-slate-400 max-w-md">“ ${activePersona.systemPrompt} ”</p>
-      <p class="text-xs text-slate-400 dark:text-slate-600">在底部输入框输入消息以开始新对话。</p>
-    `;
-    chatMessages.insertBefore(welcome, indicator);
+  if (!messages || messages.length === 0) {
+    renderEmptyState();
     return;
   }
 
-  messages.forEach(msg => {
-    appendMessageDOM(msg.role, msg.content);
+  messages.forEach((msg, idx) => {
+    appendMessageDOM(msg.role, msg.content, msg.reasoning, idx);
   });
+
+  scrollToBottom();
 }
 
-function appendMessageDOM(role, content) {
-  const isUser = role === 'user';
-  const messageWrapper = document.createElement('div');
-  messageWrapper.className = `flex ${isUser ? 'justify-end' : 'justify-start'} w-full`;
-
-  const innerHTML = isUser 
-    ? `
-      <div class="bg-indigo-600 text-white rounded-2xl rounded-tr-none px-4 py-2.5 max-w-[85%] md:max-w-[70%] shadow-sm text-sm break-words whitespace-pre-wrap">
-        ${escapeHTML(content)}
+function renderEmptyState() {
+  const activePersona = state.personas.find(p => p.id === state.currentPersonaId) || state.personas[0];
+  
+  const welcome = document.createElement('div');
+  welcome.id = 'chat-empty-state';
+  welcome.className = 'flex flex-col items-center justify-center text-center py-12 md:py-20 px-4 space-y-6 max-w-2xl mx-auto';
+  
+  welcome.innerHTML = `
+    <div class="relative">
+      <div class="w-16 h-16 md:w-20 md:h-20 rounded-3xl bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800/60 flex items-center justify-center text-4xl md:text-5xl shadow-sm">
+        ${activePersona.emoji || '🤖'}
       </div>
-    `
-    : `
-      <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800/80 text-slate-800 dark:text-slate-100 rounded-2xl rounded-tl-none px-4 py-3 max-w-[85%] md:max-w-[75%] shadow-sm text-sm break-words leading-relaxed transition-colors duration-200">
-        <div class="prose prose-slate dark:prose-invert max-w-none">
-          ${parseMarkdown(content)}
+      <div class="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900"></div>
+    </div>
+
+    <div class="space-y-2">
+      <h2 class="text-xl md:text-2xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">我是 ${escapeHTML(activePersona.name)}</h2>
+      <p class="text-xs md:text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
+        ${escapeHTML(activePersona.systemPrompt)}
+      </p>
+    </div>
+
+    <!-- Quick Prompts Pills -->
+    <div class="w-full pt-4 space-y-2">
+      <p class="text-[11px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">快捷提问体验</p>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-left">
+        <button type="button" class="quick-prompt-btn p-3 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-500 dark:hover:border-indigo-500/80 bg-white dark:bg-slate-900/60 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs text-slate-700 dark:text-slate-300 transition-all flex items-start gap-2.5 group">
+          <span class="text-base">💡</span>
+          <span class="leading-relaxed flex-1">编写一段优雅高效的 Python 异步并发请求代码</span>
+        </button>
+        <button type="button" class="quick-prompt-btn p-3 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-500 dark:hover:border-indigo-500/80 bg-white dark:bg-slate-900/60 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs text-slate-700 dark:text-slate-300 transition-all flex items-start gap-2.5 group">
+          <span class="text-base">🎨</span>
+          <span class="leading-relaxed flex-1">设计一个极简扁平风格的现代化卡片组件</span>
+        </button>
+        <button type="button" class="quick-prompt-btn p-3 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-500 dark:hover:border-indigo-500/80 bg-white dark:bg-slate-900/60 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs text-slate-700 dark:text-slate-300 transition-all flex items-start gap-2.5 group">
+          <span class="text-base">📝</span>
+          <span class="leading-relaxed flex-1">将我的技术笔记润色为通俗易懂的教程分享</span>
+        </button>
+        <button type="button" class="quick-prompt-btn p-3 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-500 dark:hover:border-indigo-500/80 bg-white dark:bg-slate-900/60 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs text-slate-700 dark:text-slate-300 transition-all flex items-start gap-2.5 group">
+          <span class="text-base">🧠</span>
+          <span class="leading-relaxed flex-1">用直观的类比剖析大语言模型的注意力机制</span>
+        </button>
+      </div>
+    </div>
+  `;
+
+  chatMessages.insertBefore(welcome, typingIndicator);
+}
+
+function appendMessageDOM(role, content, reasoning = '', msgIndex = null) {
+  const isUser = role === 'user';
+  const wrapper = document.createElement('div');
+  wrapper.className = `flex ${isUser ? 'justify-end' : 'justify-start'} w-full group msg-bubble-row`;
+  if (msgIndex !== null) {
+    wrapper.setAttribute('data-msg-index', msgIndex);
+  }
+
+  let htmlContent = '';
+
+  if (isUser) {
+    htmlContent = `
+      <div class="flex flex-col items-end max-w-[85%] md:max-w-[75%] space-y-1">
+        <div class="bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 shadow-sm text-sm break-words whitespace-pre-wrap leading-relaxed select-text">
+          ${escapeHTML(content)}
+        </div>
+        <div class="flex items-center space-x-2 text-[10px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button type="button" class="btn-copy-raw hover:text-slate-600 dark:hover:text-slate-200 flex items-center gap-1" data-text="${encodeURIComponent(content)}" title="复制内容">
+            <i data-lucide="copy" class="w-3 h-3 pointer-events-none"></i> 复制
+          </button>
+          <button type="button" class="btn-delete-msg hover:text-rose-500 flex items-center gap-1" title="删除此条">
+            <i data-lucide="trash-2" class="w-3 h-3 pointer-events-none"></i>
+          </button>
         </div>
       </div>
     `;
+  } else {
+    // Assistant 回复
+    let reasoningHtml = '';
+    if (reasoning) {
+      reasoningHtml = `
+        <div class="reasoning-block mb-3 border border-indigo-200/70 dark:border-indigo-900/40 rounded-xl bg-indigo-50/40 dark:bg-indigo-950/20 overflow-hidden text-xs">
+          <button type="button" class="reasoning-toggle flex items-center justify-between w-full px-3 py-2 text-indigo-700 dark:text-indigo-300 font-medium hover:bg-indigo-100/50 dark:hover:bg-indigo-900/30 transition-colors">
+            <span class="flex items-center gap-1.5">
+              <i data-lucide="brain" class="w-3.5 h-3.5 text-indigo-500"></i>
+              <span>已深度思考推演</span>
+            </span>
+            <i data-lucide="chevron-down" class="w-3.5 h-3.5 transition-transform duration-200"></i>
+          </button>
+          <div class="reasoning-content px-3.5 py-2.5 text-slate-600 dark:text-slate-400 border-t border-indigo-100 dark:border-indigo-900/30 leading-relaxed font-sans text-xs select-text">
+            ${parseMarkdown(reasoning)}
+          </div>
+        </div>
+      `;
+    }
 
-  messageWrapper.innerHTML = innerHTML;
-  // 插入在 typing-indicator 之前
-  chatMessages.insertBefore(messageWrapper, typingIndicator);
+    htmlContent = `
+      <div class="flex flex-col items-start max-w-[92%] md:max-w-[85%] space-y-1.5">
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm text-sm break-words leading-relaxed select-text transition-colors">
+          ${reasoningHtml}
+          <div class="prose prose-slate dark:prose-invert max-w-none message-content-node">
+            ${parseMarkdown(content)}
+          </div>
+        </div>
+        <div class="flex items-center space-x-2 text-[10px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity pl-1">
+          <button type="button" class="btn-copy-raw hover:text-slate-600 dark:hover:text-slate-200 flex items-center gap-1" data-text="${encodeURIComponent(content)}" title="复制回答">
+            <i data-lucide="copy" class="w-3 h-3 pointer-events-none"></i> 复制全文
+          </button>
+          <button type="button" class="btn-regenerate hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1" title="以此处为基础重新生成">
+            <i data-lucide="rotate-cw" class="w-3 h-3 pointer-events-none"></i> 重新生成
+          </button>
+          <button type="button" class="btn-delete-msg hover:text-rose-500 flex items-center gap-1" title="删除此条">
+            <i data-lucide="trash-2" class="w-3 h-3 pointer-events-none"></i>
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  wrapper.innerHTML = htmlContent;
+  chatMessages.insertBefore(wrapper, typingIndicator);
+
+  // 渲染数学公式与图标
+  renderMathInNode(wrapper);
+  refreshIcons();
+
+  if (!state.userScrolledUp) {
+    scrollToBottom();
+  }
+}
+
+// 滚动控制
+function handleChatScroll() {
+  const threshold = 120;
+  const isNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight <= threshold;
+  state.userScrolledUp = !isNearBottom;
+
+  if (state.userScrolledUp) {
+    scrollBottomBtn.classList.remove('hidden');
+  } else {
+    scrollBottomBtn.classList.add('hidden');
+  }
+}
+
+function scrollToBottom() {
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-// 轻量级 HTML 转义
-function escapeHTML(str) {
-  return str.replace(/[&<>'"]/g, 
-    tag => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      "'": '&#39;',
-      '"': '&quot;'
-    }[tag] || tag)
-  );
-}
-
-// 高保真自定义轻量级 Markdown 解析引擎
-function parseMarkdown(text) {
-  let html = text;
-
-  // 1. 转义普通的 HTML 标签防注入（但要保留我们后面解析出的标签）
-  html = escapeHTML(html);
-
-  // 2. 解析多行代码块 ```language ... ```
-  // 匹配：```[lang]\n[code]```
-  const codeBlockRegex = /```([a-zA-Z0-9+#-]+)?\n([\s\S]+?)\n```/g;
-  html = html.replace(codeBlockRegex, (match, lang, code) => {
-    const language = lang ? lang.trim() : 'code';
-    // 还原被转义的代码文本以供复制
-    const rawCode = code.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
-    
-    return `
-      <div class="relative group my-3">
-        <div class="flex items-center justify-between px-4 py-1.5 bg-slate-100 dark:bg-slate-800/80 border border-b-0 border-slate-200 dark:border-slate-800 rounded-t-lg text-[10px] font-mono text-slate-500 dark:text-slate-400 transition-colors">
-          <span>${language}</span>
-          <button class="btn-copy-code px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-700 hover:bg-slate-50 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 active:scale-95 transition-all" data-code="${encodeURIComponent(rawCode)}">
-            复制
-          </button>
-        </div>
-        <pre class="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 p-4 rounded-b-lg font-mono text-xs overflow-x-auto text-slate-800 dark:text-slate-200"><code class="language-${language}">${code}</code></pre>
-      </div>
-    `;
+function scrollToBottomSmooth() {
+  chatMessages.scrollTo({
+    top: chatMessages.scrollHeight,
+    behavior: 'smooth'
   });
-
-  // 3. 解析行内代码 `code`
-  html = html.replace(/`([^`]+)`/g, '<code class="bg-slate-100 dark:bg-slate-800/80 px-1 py-0.5 rounded font-mono text-xs text-indigo-600 dark:text-indigo-400">$1</code>');
-
-  // 4. 解析加粗 **bold**
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-slate-900 dark:text-slate-50 font-semibold">$1</strong>');
-
-  // 5. 解析列表
-  // 匹配无序列表 - item
-  html = html.replace(/^\s*-\s+(.+)$/gm, '<li class="list-disc list-inside ml-2 py-0.5">$1</li>');
-  // 匹配有序列表 1. item
-  html = html.replace(/^\s*(\d+)\.\s+(.+)$/gm, '<li class="list-decimal list-inside ml-2 py-0.5">$2</li>');
-
-  // 6. 处理换行符 \n -> <br>（只对不在 <pre> 块内的内容生效）
-  // 简单方案：先按 <pre> 分隔，再对非 <pre> 的块替换 \n 为 <br>
-  const parts = html.split(/(<div[\s\S]+?<\/div>)/g);
-  html = parts.map(part => {
-    if (part.startsWith('<div')) return part;
-    return part.replace(/\n/g, '<br>');
-  }).join('');
-
-  return html;
+  state.userScrolledUp = false;
+  scrollBottomBtn.classList.add('hidden');
 }
 
 // ==========================================
-// 9. API 请求与对话发送
+// 10. API 对话流式交互 (Fetch + SSE)
 // ==========================================
-async function sendMessage() {
-  const content = chatInput.value.trim();
+
+function handleSendOrStop() {
+  if (state.isGenerating) {
+    stopGenerating();
+  } else {
+    sendMessage();
+  }
+}
+
+function stopGenerating() {
+  if (state.abortController) {
+    state.abortController.abort();
+    state.abortController = null;
+  }
+  setGeneratingUI(false);
+  showToast('已停止生成');
+}
+
+function setGeneratingUI(generating) {
+  state.isGenerating = generating;
+  if (generating) {
+    sendBtn.innerHTML = `<i data-lucide="square" class="w-4 h-4 text-white fill-white"></i>`;
+    sendBtn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+    sendBtn.classList.add('bg-rose-600', 'hover:bg-rose-700');
+    sendBtn.title = '点击停止生成';
+  } else {
+    sendBtn.innerHTML = `<i data-lucide="send" class="w-4 h-4"></i>`;
+    sendBtn.classList.remove('bg-rose-600', 'hover:bg-rose-700');
+    sendBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+    sendBtn.title = '发送 (Enter)';
+    typingIndicator.classList.remove('flex');
+    typingIndicator.classList.add('hidden');
+  }
+  refreshIcons();
+}
+
+async function sendMessage(overrideText = null) {
+  const content = overrideText || chatInput.value.trim();
   if (!content) return;
 
   // 检查 API Key
   if (!state.apiKey) {
-    showToast('请在侧边栏先配置 API Key', true);
-    // 聚焦到 API Key 输入框
+    showToast('请在侧边栏先配置您的 API Key', true);
+    openSidebar();
     apiKeyInput.focus();
-    // 晃动设置面板提示用户
-    apiKeyInput.classList.add('animate-bounce');
-    setTimeout(() => apiKeyInput.classList.remove('animate-bounce'), 1000);
     return;
   }
 
-  // 1. 如果没有当前会话，则在发送第一条消息时自动创建
+  // 若无会话则自动创建
   if (!state.currentConversationId) {
     createNewChat();
   }
 
-  // 获取当前活跃的会话
-  const convIndex = state.conversations.findIndex(c => c.id === state.currentConversationId);
-  if (convIndex === -1) return;
-  const conv = state.conversations[convIndex];
+  const conv = state.conversations.find(c => c.id === state.currentConversationId);
+  if (!conv) return;
 
-  // 2. 推送用户消息
+  // 清空初始欢迎状态
+  const emptyState = document.getElementById('chat-empty-state');
+  if (emptyState) emptyState.remove();
+
+  // 推送用户消息
   const userMsg = { role: 'user', content };
   conv.messages.push(userMsg);
-  
-  // 更新历史会话的标题为用户发的第一条消息的简短版本
+
+  // 若为第一条消息，则重设标题
   if (conv.messages.filter(m => m.role === 'user').length === 1) {
-    conv.title = content.length > 15 ? content.substring(0, 15) + '...' : content;
+    conv.title = content.length > 20 ? content.substring(0, 20) + '...' : content;
+    headerConversationTitle.innerText = '· ' + conv.title;
   }
 
-  // 更新存储与渲染
   localStorage.setItem('chat_conversations', JSON.stringify(state.conversations));
   renderConversations();
-  appendMessageDOM('user', content);
 
-  // 清理输入框
-  chatInput.value = '';
-  autoResizeInput();
+  // 渲染用户气泡
+  appendMessageDOM('user', content, '', conv.messages.length - 1);
 
-  // 3. 显示打字输入状态
+  // 清空输入框
+  if (!overrideText) {
+    chatInput.value = '';
+    autoResizeInput();
+  }
+
+  // 开启打字动效与停止按钮
+  setGeneratingUI(true);
   typingIndicator.classList.remove('hidden');
   typingIndicator.classList.add('flex');
-  chatMessages.scrollTop = chatMessages.scrollHeight;
+  scrollToBottom();
 
-  // 4. 获取当前选中的人设信息
   const activePersona = state.personas.find(p => p.id === state.currentPersonaId) || state.personas[0];
 
-  // 组装 API 参数
-  // 必须首条带上 system prompt
+  // 组装对话上下文 (根据 contextLimit 截取历史)
+  let historyMessages = [...conv.messages];
+  if (state.contextLimit > 0 && state.contextLimit < 999) {
+    const keepCount = state.contextLimit * 2;
+    historyMessages = historyMessages.slice(-keepCount);
+  } else if (state.contextLimit === 0) {
+    historyMessages = [userMsg];
+  }
+
   const requestMessages = [
     { role: 'system', content: activePersona.systemPrompt },
-    ...conv.messages
+    ...historyMessages.map(m => ({ role: m.role, content: m.content }))
   ];
 
+  // 规范化 API Endpoint
+  let endpoint = (state.apiEndpoint || 'https://api.chatanywhere.tech/v1').replace(/\/+$/, '');
+  const url = `${endpoint}/chat/completions`;
+
+  state.abortController = new AbortController();
+
+  // 动态创建 AI 消息容器
+  let responseWrapper = null;
+  let textNode = null;
+  let reasoningContainer = null;
+  let reasoningContentNode = null;
+  let assistantReply = '';
+  let assistantReasoning = '';
+
   try {
-    const response = await fetch('https://api.chatanywhere.tech/v1/chat/completions', {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -702,37 +1187,43 @@ async function sendMessage() {
       body: JSON.stringify({
         model: activePersona.model || 'gpt-4o-mini',
         messages: requestMessages,
-        temperature: activePersona.temperature,
+        temperature: activePersona.temperature !== undefined ? activePersona.temperature : 0.7,
         stream: true
-      })
+      }),
+      signal: state.abortController.signal
     });
 
     if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`API 响应错误 (${response.status}): ${errText}`);
+      let errText = await response.text();
+      try {
+        const errJson = JSON.parse(errText);
+        errText = errJson.error?.message || errText;
+      } catch (e) {}
+      throw new Error(`[${response.status}] ${errText}`);
     }
 
-    // 隐藏打字提示
     typingIndicator.classList.remove('flex');
     typingIndicator.classList.add('hidden');
 
-    // 5. 创建接收流数据的新 DOM 气泡
-    const responseWrapper = document.createElement('div');
-    responseWrapper.className = 'flex justify-start w-full';
+    // 建立新气泡
+    responseWrapper = document.createElement('div');
+    responseWrapper.className = 'flex justify-start w-full group msg-bubble-row';
     responseWrapper.innerHTML = `
-      <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800/80 text-slate-800 dark:text-slate-100 rounded-2xl rounded-tl-none px-4 py-3 max-w-[85%] md:max-w-[75%] shadow-sm text-sm break-words leading-relaxed transition-colors duration-200">
-        <div class="prose prose-slate dark:prose-invert max-w-none message-content-node">
-          <!-- 动态文字流写入处 -->
+      <div class="flex flex-col items-start max-w-[92%] md:max-w-[85%] space-y-1.5">
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm text-sm break-words leading-relaxed select-text transition-colors">
+          <div class="reasoning-slot"></div>
+          <div class="prose prose-slate dark:prose-invert max-w-none message-content-node">
+            <span class="text-slate-400 italic text-xs animate-pulse">正在输出...</span>
+          </div>
         </div>
       </div>
     `;
     chatMessages.insertBefore(responseWrapper, typingIndicator);
-    const textNode = responseWrapper.querySelector('.message-content-node');
+    textNode = responseWrapper.querySelector('.message-content-node');
+    const reasoningSlot = responseWrapper.querySelector('.reasoning-slot');
 
-    // 6. 流式接收数据
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
-    let assistantReply = '';
     let buffer = '';
 
     while (true) {
@@ -743,82 +1234,295 @@ async function sendMessage() {
       buffer += chunk;
 
       const lines = buffer.split('\n');
-      buffer = lines.pop(); // 保留最后一个不完整的行在 buffer 中
+      buffer = lines.pop();
 
       for (let line of lines) {
         line = line.trim();
-        if (!line) continue;
-        if (line === 'data: [DONE]') continue;
+        if (!line || line === 'data: [DONE]') continue;
 
         if (line.startsWith('data: ')) {
           try {
-            const parsed = JSON.parse(line.slice(6));
-            const content = parsed.choices[0]?.delta?.content || '';
-            assistantReply += content;
-            // 实时将当前接收的完整文本进行 Markdown 渲染
-            textNode.innerHTML = parseMarkdown(assistantReply);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            const data = JSON.parse(line.slice(6));
+            const delta = data.choices[0]?.delta || {};
+
+            // 处理推理思考内容 (DeepSeek 或其他思考模型格式)
+            if (delta.reasoning_content) {
+              assistantReasoning += delta.reasoning_content;
+              if (!reasoningContainer) {
+                reasoningContainer = document.createElement('div');
+                reasoningContainer.className = 'reasoning-block mb-3 border border-indigo-200/70 dark:border-indigo-900/40 rounded-xl bg-indigo-50/40 dark:bg-indigo-950/20 overflow-hidden text-xs';
+                reasoningContainer.innerHTML = `
+                  <div class="flex items-center gap-1.5 px-3 py-2 text-indigo-700 dark:text-indigo-300 font-medium bg-indigo-100/50 dark:bg-indigo-900/30">
+                    <i data-lucide="brain" class="w-3.5 h-3.5 text-indigo-500 animate-pulse"></i>
+                    <span>深度思考中...</span>
+                  </div>
+                  <div class="reasoning-content px-3.5 py-2.5 text-slate-600 dark:text-slate-400 border-t border-indigo-100 dark:border-indigo-900/30 leading-relaxed font-sans text-xs"></div>
+                `;
+                reasoningSlot.appendChild(reasoningContainer);
+                reasoningContentNode = reasoningContainer.querySelector('.reasoning-content');
+                refreshIcons();
+              }
+              if (reasoningContentNode) {
+                reasoningContentNode.innerHTML = parseMarkdown(assistantReasoning);
+              }
+            }
+
+            // 处理正文内容
+            if (delta.content) {
+              assistantReply += delta.content;
+              
+              // 兼容正文内嵌 <think>...</think> 格式
+              let displayContent = assistantReply;
+              if (displayContent.includes('<think>') && !reasoningContainer) {
+                const thinkMatch = displayContent.match(/<think>([\s\S]*?)(?:<\/think>|$)/);
+                if (thinkMatch) {
+                  assistantReasoning = thinkMatch[1];
+                  displayContent = displayContent.replace(/<think>[\s\S]*?<\/think>/, '').trim();
+                }
+              }
+
+              textNode.innerHTML = parseMarkdown(displayContent);
+            }
+
+            if (!state.userScrolledUp) {
+              scrollToBottom();
+            }
           } catch (e) {
-            // 解析失败时可能是一行 SSE 的控制字符，忽略
+            // 控制行非 JSON 忽略
           }
         }
       }
     }
 
-    // 处理最后 buffer 里的数据
-    if (buffer && buffer.startsWith('data: ')) {
+    // 处理残余 buffer
+    if (buffer && buffer.startsWith('data: ') && buffer !== 'data: [DONE]') {
       try {
-        const parsed = JSON.parse(buffer.slice(6));
-        const content = parsed.choices[0]?.delta?.content || '';
-        assistantReply += content;
-        textNode.innerHTML = parseMarkdown(assistantReply);
-      } catch(e) {}
+        const data = JSON.parse(buffer.slice(6));
+        const delta = data.choices[0]?.delta || {};
+        if (delta.content) {
+          assistantReply += delta.content;
+          textNode.innerHTML = parseMarkdown(assistantReply);
+        }
+      } catch (e) {}
     }
 
-    // 7. 写入本地历史记录
-    conv.messages.push({ role: 'assistant', content: assistantReply });
+    // 格式化思考过程为可折叠状态
+    if (reasoningContainer) {
+      reasoningContainer.innerHTML = `
+        <button type="button" class="reasoning-toggle flex items-center justify-between w-full px-3 py-2 text-indigo-700 dark:text-indigo-300 font-medium hover:bg-indigo-100/50 dark:hover:bg-indigo-900/30 transition-colors">
+          <span class="flex items-center gap-1.5">
+            <i data-lucide="brain" class="w-3.5 h-3.5 text-indigo-500"></i>
+            <span>已深度思考推演</span>
+          </span>
+          <i data-lucide="chevron-down" class="w-3.5 h-3.5 transition-transform duration-200"></i>
+        </button>
+        <div class="reasoning-content px-3.5 py-2.5 text-slate-600 dark:text-slate-400 border-t border-indigo-100 dark:border-indigo-900/30 leading-relaxed font-sans text-xs select-text">
+          ${parseMarkdown(assistantReasoning)}
+        </div>
+      `;
+    }
+
+    // 保存至当前会话记录
+    const finalMsg = { 
+      role: 'assistant', 
+      content: assistantReply,
+      reasoning: assistantReasoning 
+    };
+    conv.messages.push(finalMsg);
     localStorage.setItem('chat_conversations', JSON.stringify(state.conversations));
 
-  } catch (err) {
-    console.error('发送消息请求失败：', err);
-    // 隐藏打字提示
-    typingIndicator.classList.remove('flex');
-    typingIndicator.classList.add('hidden');
+    // 添加操作工具栏 (复制全文 / 重新生成 / 删除)
+    const bubbleCol = responseWrapper.querySelector('.flex.flex-col');
+    if (bubbleCol) {
+      const toolBar = document.createElement('div');
+      toolBar.className = 'flex items-center space-x-2 text-[10px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity pl-1';
+      toolBar.innerHTML = `
+        <button type="button" class="btn-copy-raw hover:text-slate-600 dark:hover:text-slate-200 flex items-center gap-1" data-text="${encodeURIComponent(assistantReply)}" title="复制回答">
+          <i data-lucide="copy" class="w-3 h-3 pointer-events-none"></i> 复制全文
+        </button>
+        <button type="button" class="btn-regenerate hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1" title="以此处为基础重新生成">
+          <i data-lucide="rotate-cw" class="w-3 h-3 pointer-events-none"></i> 重新生成
+        </button>
+        <button type="button" class="btn-delete-msg hover:text-rose-500 flex items-center gap-1" title="删除此条">
+          <i data-lucide="trash-2" class="w-3 h-3 pointer-events-none"></i>
+        </button>
+      `;
+      bubbleCol.appendChild(toolBar);
+    }
 
-    // 显示出错气泡
-    const errWrapper = document.createElement('div');
-    errWrapper.className = 'flex justify-start w-full';
-    errWrapper.innerHTML = `
-      <div class="bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-400 rounded-2xl rounded-tl-none px-4 py-2.5 max-w-[85%] shadow-sm text-xs transition-colors duration-200">
-        <strong>请求失败：</strong> ${err.message || '网络或接口连接异常'}
-      </div>
-    `;
-    chatMessages.insertBefore(errWrapper, typingIndicator);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    renderMathInNode(responseWrapper);
+    refreshIcons();
+
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      // 用户主动取消，保存已有生成内容
+      if (assistantReply) {
+        conv.messages.push({ role: 'assistant', content: assistantReply + ' *(生成已手动中止)*', reasoning: assistantReasoning });
+        localStorage.setItem('chat_conversations', JSON.stringify(state.conversations));
+      }
+    } else {
+      console.error('发送消息请求失败：', err);
+      typingIndicator.classList.remove('flex');
+      typingIndicator.classList.add('hidden');
+
+      const errWrapper = document.createElement('div');
+      errWrapper.className = 'flex justify-start w-full';
+      errWrapper.innerHTML = `
+        <div class="bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-300 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[85%] shadow-sm text-xs leading-relaxed space-y-1">
+          <div class="flex items-center gap-1.5 font-semibold text-rose-800 dark:text-rose-200">
+            <i data-lucide="alert-octagon" class="w-4 h-4 text-rose-500"></i> 请求未成功
+          </div>
+          <p>${escapeHTML(err.message || '网络连接异常或接口未响应')}</p>
+          <p class="text-[10px] text-slate-400 dark:text-slate-500 pt-1">提示：请检查侧边栏的 API Key、API Base URL 是否正确，或网络是否支持该接口代理。</p>
+        </div>
+      `;
+      chatMessages.insertBefore(errWrapper, typingIndicator);
+      refreshIcons();
+    }
+  } finally {
+    setGeneratingUI(false);
+    state.abortController = null;
+    if (!state.userScrolledUp) {
+      scrollToBottom();
+    }
   }
 }
 
 // ==========================================
-// 10. 事件代理与全局操作
+// 11. 数据导出、备份与恢复
 // ==========================================
+
+function exportActiveChatAsMarkdown() {
+  const conv = state.conversations.find(c => c.id === state.currentConversationId);
+  if (!conv || !conv.messages || conv.messages.length === 0) {
+    showToast('当前会话暂无内容可导出', true);
+    return;
+  }
+
+  const persona = state.personas.find(p => p.id === conv.personaId) || DEFAULT_PERSONAS[0];
+  let md = `# ${conv.title}\n\n`;
+  md += `> **AI 人设**：${persona.emoji} ${persona.name} (${persona.model})\n`;
+  md += `> **导出时间**：${new Date().toLocaleString()}\n\n---\n\n`;
+
+  conv.messages.forEach(msg => {
+    if (msg.role === 'user') {
+      md += `### 👤 User:\n\n${msg.content}\n\n`;
+    } else {
+      if (msg.reasoning) {
+        md += `> **🧠 思考过程**:\n> ${msg.reasoning.replace(/\n/g, '\n> ')}\n\n`;
+      }
+      md += `### 🤖 Assistant:\n\n${msg.content}\n\n`;
+    }
+    md += `---\n\n`;
+  });
+
+  downloadBlob(md, `${conv.title.replace(/[\\/:*?"<>|]/g, '_')}.md`, 'text/markdown;charset=utf-8');
+  showToast('会话已导出为 Markdown');
+}
+
+function exportAllDataAsJSON() {
+  const exportPayload = {
+    version: '2.0',
+    exportDate: new Date().toISOString(),
+    settings: {
+      apiProvider: state.apiProvider,
+      apiEndpoint: state.apiEndpoint,
+      contextLimit: state.contextLimit
+    },
+    personas: state.personas,
+    conversations: state.conversations
+  };
+
+  const jsonStr = JSON.stringify(exportPayload, null, 2);
+  const fileName = `custom-ai-chat-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  downloadBlob(jsonStr, fileName, 'application/json;charset=utf-8');
+  showToast('全量数据已备份下载');
+}
+
+function handleImportJSON(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(evt) {
+    try {
+      const data = JSON.parse(evt.target.result);
+      if (!data || !Array.isArray(data.conversations)) {
+        throw new Error('无效的备份文件结构');
+      }
+
+      if (confirm(`检测到备份包含 ${data.conversations.length} 个历史会话与 ${data.personas?.length || 0} 个人设。确定恢复并合并数据吗？`)) {
+        if (Array.isArray(data.personas) && data.personas.length > 0) {
+          // 合并人设，避免重复 id
+          const existingIds = new Set(state.personas.map(p => p.id));
+          data.personas.forEach(p => {
+            if (!existingIds.has(p.id)) state.personas.push(p);
+          });
+          localStorage.setItem('chat_personas', JSON.stringify(state.personas));
+        }
+
+        const existingConvIds = new Set(state.conversations.map(c => c.id));
+        data.conversations.forEach(c => {
+          if (!existingConvIds.has(c.id)) state.conversations.unshift(c);
+        });
+        localStorage.setItem('chat_conversations', JSON.stringify(state.conversations));
+
+        renderPersonas();
+        renderConversations();
+        if (state.conversations.length > 0) {
+          selectConversation(state.conversations[0].id);
+        }
+        showToast('数据恢复成功！');
+      }
+    } catch (err) {
+      console.error('导入失败：', err);
+      showToast('恢复失败：备份文件格式不正确', true);
+    } finally {
+      importJsonFile.value = '';
+    }
+  };
+  reader.readAsText(file);
+}
+
+function downloadBlob(content, filename, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ==========================================
+// 12. 全局点击代理与事件交互
+// ==========================================
+
 function handleGlobalClicks(e) {
   const target = e.target;
 
-  // 1. 人设卡片选择
+  // 1. 快捷 Prompt 胶囊点击
+  const quickBtn = target.closest('.quick-prompt-btn');
+  if (quickBtn) {
+    const textSpan = quickBtn.querySelector('span:last-child');
+    if (textSpan) {
+      sendMessage(textSpan.innerText.trim());
+    }
+    return;
+  }
+
+  // 2. 人设选择
   const personaSelectNode = target.closest('.btn-select-persona');
   if (personaSelectNode) {
     const personaId = personaSelectNode.closest('[data-persona-id]').getAttribute('data-persona-id');
     state.currentPersonaId = personaId;
     localStorage.setItem('chat_current_persona_id', personaId);
-    
-    // 更新主界面的 Header 显示
+
     const persona = state.personas.find(p => p.id === personaId);
-    if (persona) {
-      updateHeader(persona);
-    }
-    
-    // 如果没有正在进行的会话，直接刷新空欢迎信息；若有，点击后不影响当前会话，仅表明“当前选用人设”。
-    // 用户如需开启新对话，可以点击新对话按钮。
+    if (persona) updateHeader(persona);
+
     if (!state.currentConversationId) {
       renderMessages([]);
     }
@@ -827,7 +1531,7 @@ function handleGlobalClicks(e) {
     return;
   }
 
-  // 2. 编辑人设
+  // 3. 编辑人设
   const personaEditNode = target.closest('.btn-edit-persona');
   if (personaEditNode) {
     const personaId = personaEditNode.closest('[data-persona-id]').getAttribute('data-persona-id');
@@ -835,59 +1539,128 @@ function handleGlobalClicks(e) {
     return;
   }
 
-  // 3. 删除人设
+  // 4. 删除人设
   const personaDeleteNode = target.closest('.btn-delete-persona');
   if (personaDeleteNode) {
-    if (confirm('确定要删除这个人设吗？')) {
-      const personaId = personaDeleteNode.closest('[data-persona-id]').getAttribute('data-persona-id');
+    const personaId = personaDeleteNode.closest('[data-persona-id]').getAttribute('data-persona-id');
+    if (confirm('确定要删除此人设吗？')) {
       deletePersona(personaId);
     }
     return;
   }
 
-  // 4. 会话选择
+  // 5. 选中会话
   const convSelectNode = target.closest('.btn-select-conversation');
   if (convSelectNode) {
     const convId = convSelectNode.closest('[data-conversation-id]').getAttribute('data-conversation-id');
     selectConversation(convId);
-    
-    // 手机端自动折叠侧边栏
-    if (window.innerWidth < 768) {
-      closeSidebar();
-    }
+    if (window.innerWidth < 768) closeSidebar();
     return;
   }
 
-  // 5. 删除会话
+  // 6. 重命名会话
+  const convRenameNode = target.closest('.btn-rename-conversation');
+  if (convRenameNode) {
+    const convId = convRenameNode.closest('[data-conversation-id]').getAttribute('data-conversation-id');
+    renameConversation(convId);
+    return;
+  }
+
+  // 7. 删除会话
   const convDeleteNode = target.closest('.btn-delete-conversation');
   if (convDeleteNode) {
+    const convId = convDeleteNode.closest('[data-conversation-id]').getAttribute('data-conversation-id');
     if (confirm('确认删除此会话记录吗？')) {
-      const convId = convDeleteNode.closest('[data-conversation-id]').getAttribute('data-conversation-id');
       deleteConversation(convId);
     }
     return;
   }
 
-  // 6. 复制 Markdown 代码块代码
-  const copyCodeNode = target.closest('.btn-copy-code');
-  if (copyCodeNode) {
-    const rawCode = decodeURIComponent(copyCodeNode.getAttribute('data-code'));
-    navigator.clipboard.writeText(rawCode)
-      .then(() => {
-        copyCodeNode.innerText = '已复制';
-        copyCodeNode.classList.add('bg-emerald-500', 'text-white', 'border-emerald-600');
-        copyCodeNode.classList.remove('bg-white', 'dark:bg-slate-700');
-        
-        setTimeout(() => {
-          copyCodeNode.innerText = '复制';
-          copyCodeNode.classList.remove('bg-emerald-500', 'text-white', 'border-emerald-600');
-          copyCodeNode.classList.add('bg-white', 'dark:bg-slate-700');
-        }, 2000);
-      })
-      .catch(err => {
-        console.error('复制代码失败：', err);
-        showToast('复制失败，请手动选择复制', true);
-      });
+  // 8. 复制代码块代码
+  const copyCodeBtn = target.closest('.btn-copy-code');
+  if (copyCodeBtn) {
+    const rawCode = decodeURIComponent(copyCodeBtn.getAttribute('data-code') || '');
+    navigator.clipboard.writeText(rawCode).then(() => {
+      copyCodeBtn.innerHTML = `<i data-lucide="check" class="w-3 h-3 text-emerald-400"></i> 已复制`;
+      refreshIcons();
+      setTimeout(() => {
+        copyCodeBtn.innerHTML = `<i data-lucide="copy" class="w-3 h-3"></i> 复制`;
+        refreshIcons();
+      }, 2000);
+    }).catch(() => showToast('复制失败，请手动选取', true));
+    return;
+  }
+
+  // 9. 复制整条消息
+  const copyRawBtn = target.closest('.btn-copy-raw');
+  if (copyRawBtn) {
+    const rawText = decodeURIComponent(copyRawBtn.getAttribute('data-text') || '');
+    navigator.clipboard.writeText(rawText).then(() => {
+      showToast('消息全文已复制');
+    }).catch(() => showToast('复制失败', true));
+    return;
+  }
+
+  // 10. 重新生成回答
+  const regenBtn = target.closest('.btn-regenerate');
+  if (regenBtn) {
+    if (state.isGenerating) {
+      showToast('正在生成中，请先停止', true);
+      return;
+    }
+    const conv = state.conversations.find(c => c.id === state.currentConversationId);
+    if (!conv || conv.messages.length === 0) return;
+
+    // 找到最后一条用户消息
+    let lastUserIndex = -1;
+    for (let i = conv.messages.length - 1; i >= 0; i--) {
+      if (conv.messages[i].role === 'user') {
+        lastUserIndex = i;
+        break;
+      }
+    }
+
+    if (lastUserIndex !== -1) {
+      const userText = conv.messages[lastUserIndex].content;
+      // 移除最后一条用户消息及后续所有内容
+      conv.messages = conv.messages.slice(0, lastUserIndex);
+      localStorage.setItem('chat_conversations', JSON.stringify(state.conversations));
+      renderMessages(conv.messages);
+      sendMessage(userText);
+    }
+    return;
+  }
+
+  // 11. 删除单条消息
+  const deleteMsgBtn = target.closest('.btn-delete-msg');
+  if (deleteMsgBtn) {
+    const row = deleteMsgBtn.closest('.msg-bubble-row');
+    if (!row) return;
+    const msgIndex = parseInt(row.getAttribute('data-msg-index'), 10);
+    const conv = state.conversations.find(c => c.id === state.currentConversationId);
+    if (conv && !isNaN(msgIndex) && conv.messages[msgIndex]) {
+      conv.messages.splice(msgIndex, 1);
+      localStorage.setItem('chat_conversations', JSON.stringify(state.conversations));
+      renderMessages(conv.messages);
+      showToast('消息已删除');
+    }
+    return;
+  }
+
+  // 12. 思考推演折叠展开
+  const reasoningToggle = target.closest('.reasoning-toggle');
+  if (reasoningToggle) {
+    const block = reasoningToggle.closest('.reasoning-block');
+    const contentNode = block.querySelector('.reasoning-content');
+    const icon = reasoningToggle.querySelector('[data-lucide="chevron-down"]');
+    
+    if (contentNode.style.display === 'none') {
+      contentNode.style.display = 'block';
+      if (icon) icon.style.transform = 'rotate(0deg)';
+    } else {
+      contentNode.style.display = 'none';
+      if (icon) icon.style.transform = 'rotate(-90deg)';
+    }
     return;
   }
 }
